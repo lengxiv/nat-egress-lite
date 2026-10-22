@@ -46,6 +46,12 @@ amd64 与 arm64 组件已使用官方 musl 1.2.6 及其 iconv 官方安全修补
 
 这些结果证明适配逻辑和该沙盒中的 OpenSSH 数据路径，不等于逐个 Linux 发行版实机安装测试。未在 Alpine/OpenRC 或 RHEL/SELinux 真机启动服务，未执行真实入口 Xray 回滚演练，也未进行 64 MB 整机压测。无 root、无真实 init 或商家网络限制的环境不能由模拟测试保证可运行。
 
+## VLESS REALITY 默认模式 — v0.4.0
+
+新增 VLESS 服务、配置生成器与分享链接输出。配置/URI 测试通过：公网端口与本机监听端口区分、IPv6 方括号、中文名称百分号编码、私钥不写入分享链接或入口出站、0600 权限、非法输入拒绝。Bash/ShellCheck 与默认 VLESS/显式 --ssh 的无修改演练均通过。
+
+官方 Xray 26.10.21 ARM64 使用临时真实 x25519 密钥校验服务端与入口出站配置，两份均为 Configuration OK。主安装器的官方下载函数在临时目录运行：ZIP SHA256 与内嵌官方摘要匹配，提取的 ARM64 核心可运行。未安装真实 VLESS 服务，没有验证用户公网 NAT 映射、真实 VLESS 客户端握手、64 MB 整机压力或更新失败恢复；不能把前文 SSH TCP 数据路径的成功当作 VLESS 端到端结果。
+
 ## References
 
 [1]: https://manpages.debian.org/trixie/dropbear-bin/dbclient.1.en.html "Debian 13 dbclient manual"

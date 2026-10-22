@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+export GOMEMLIMIT="${GOMEMLIMIT:-24MiB}"
+export GOGC="${GOGC:-50}"
+export GOMAXPROCS="${GOMAXPROCS:-1}"
+# Debian dash 与 Alpine ash 支持该限制。
+# shellcheck disable=SC3045
+ulimit -n 128
+exec /usr/local/lib/nat-egress-vless/xray run -config /etc/nat-egress-vless/config.json

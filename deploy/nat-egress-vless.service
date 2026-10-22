@@ -1,0 +1,31 @@
+[Unit]
+Description=NAT Egress VLESS REALITY
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=nat-vless
+Group=nat-vless
+WorkingDirectory=/var/lib/nat-vless
+Environment=GOMEMLIMIT=24MiB
+Environment=GOGC=50
+Environment=GOMAXPROCS=1
+ExecStart=/usr/local/lib/nat-egress-vless/run-vless
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=128
+TasksMax=64
+MemoryMax=44M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

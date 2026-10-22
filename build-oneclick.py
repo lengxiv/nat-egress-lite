@@ -15,6 +15,12 @@ resources = {
     'nat-egress-socks.openrc': 'deploy/nat-egress-socks.openrc',
     'nat-egress-tunnel.openrc': 'deploy/nat-egress-tunnel.openrc',
     'microsocks.sha256': 'config/microsocks.sha256',
+    'vless-setup.sh': 'scripts/vless-setup.sh',
+    'vless-config.sh': 'scripts/vless-config.sh',
+    'run-vless': 'bin/run-vless',
+    'nat-egress-vless.service': 'deploy/nat-egress-vless.service',
+    'nat-egress-vless.openrc': 'deploy/nat-egress-vless.openrc',
+    'xray.sha256': 'config/xray.sha256',
 }
 head = root.joinpath('scripts/setup-head.sh').read_text()
 pieces = ['#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\n',
@@ -26,7 +32,20 @@ for name, source in resources.items():
     if delimiter in text.splitlines():
         raise ValueError('heredoc delimiter collision')
     pieces.append(f'cat > "$NE_BUNDLE/{name}" <<\'{delimiter}\'\n{text.rstrip()}\n{delimiter}\n')
-pieces.append(head.split('\n', 1)[1])
+guard = 'if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi'
+dispatch = '''# 默认部署用户需要的 VLESS 节点；旧反向 SSH 为可选兼容模式。
+# shellcheck disable=SC1090,SC1091
+source "$NE_BUNDLE/vless-config.sh"
+# shellcheck disable=SC1090,SC1091
+source "$NE_BUNDLE/vless-setup.sh"
+if [[ ${1:-} == --ssh ]]; then
+    shift
+    main "$@"
+else
+    nv_main "$@"
+fi'''
+assert head.count(guard) == 1, 'main dispatch guard changed'
+pieces.append(head.split('\n', 1)[1].replace(guard, dispatch))
 target = root / 'oneclick.sh'
 target.write_text(''.join(pieces))
 target.chmod(0o755)

@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+supervisor=supervise-daemon
+command=/usr/local/lib/nat-egress-vless/run-vless
+command_user="nat-vless:nat-vless"
+export HOME=/var/lib/nat-vless
+export GOMEMLIMIT=24MiB
+export GOGC=50
+export GOMAXPROCS=1
+respawn_delay=5
+respawn_max=3
+respawn_period=120
+output_log=/dev/null
+error_logger="logger -t nat-egress-vless"
+depend() {
+    need net
+}
