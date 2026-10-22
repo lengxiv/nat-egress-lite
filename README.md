@@ -4,13 +4,13 @@
 
 ## 直接使用
 
-下载仓库中的 **`oneclick.sh`**，上传到 NAT 落地机，然后运行：
+在 NAT 落地机以 root 执行以下一行，无需 GitHub Token：
 
 ```bash
-bash oneclick.sh
+curl -fsSL https://raw.githubusercontent.com/lengxiv/nat-egress-lite/main/oneclick.sh -o /root/nat-egress-install.sh && bash /root/nat-egress-install.sh
 ```
 
-该文件已经包含所需配置和代码，**不需要在落地机安装 Git、克隆整个仓库或编译源码**。仓库是私有的，未登录的 `curl raw.githubusercontent.com/...` 无法直接下载，请从 GitHub 登录页面或交付附件取得脚本。
+仓库现为公共。脚本已经包含所需配置和代码，**不需要在落地机安装 Git、克隆整个仓库或编译源码**。若没有 curl，可先用已有 wget 下载：`wget -O /root/nat-egress-install.sh https://raw.githubusercontent.com/lengxiv/nat-egress-lite/main/oneclick.sh && bash /root/nat-egress-install.sh`。没有下载工具时需先安装 curl，或从 GitHub 下载脚本并上传到落地机，运行 `bash oneclick.sh`。
 
 如果已经下载完整项目，也可以用原命令，它现在会进入同一个交互向导：
 
