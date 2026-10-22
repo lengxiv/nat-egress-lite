@@ -28,6 +28,16 @@ ShellCheck 检查两个启动脚本通过；主代理另行检查安装器与 pr
 
 开发测试需要编译 microsocks 并安装 Python、OpenSSH、curl 等测试依赖，只在资源充足的隔离开发机运行；64 MB 落地部署不需要这些工具，安装器使用现成 Debian 包。
 
+## 交互式一键版本验证 — 2026-10-23
+
+新增独立 `oneclick.sh`，内嵌落地脚本、服务文件、日本端 helper 和 Xray 合并逻辑。整份脚本及来源脚本的 ShellCheck、Bash 语法检查均通过；`--help` 和 `--dry-run` 已运行，演练没有连接服务器、安装软件或修改服务。
+
+`tests/test_oneclick.sh` 通过端口范围、IPv4/IPv6 TCP 监听解析和避开占用端口的测试。`tests/test_xray_merge.py` 四项通过：保留入口和领先安全规则、幂等、多个入站请求选择、端口与密码一致传递。
+
+`tests/test_jp_preflight.py` 三项通过：自动避开模拟已占用的 19080 并将实际端口传给合并器，同时读取模拟 sshd 实际启用的主机公钥；多个入站返回选择列表且不改原配置；显式已占用端口被拒绝。测试只执行预检部分，系统路径和服务使用临时副本及替身。
+
+七项 Python 测试与 Bash 端口测试均通过。**没有在用户两台真实服务器上执行交互式全流程，也没有进行真实 sshd 重载/Xray 重启失败的回滚演练。** 回滚分支有代码及静态检查，但不能据此保证所有真实系统配置都能成功。SSH 密码登录、商家权限、64 MB 资源压力和完整客户端出口仍需真机验证。
+
 ## References
 
 [1]: https://manpages.debian.org/trixie/dropbear-bin/dbclient.1.en.html "Debian 13 dbclient manual"
