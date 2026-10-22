@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+CONF=${1:-/etc/nat-egress/egress.conf}
+[ -r "$CONF" ] || { echo '无法读取落地配置。' >&2; exit 1; }
+# shellcheck disable=SC1090
+. "$CONF"
+case ${SOCKS_PORT:-} in ''|*[!0-9]*) echo 'SOCKS_PORT 必须为整数。' >&2; exit 1;; esac
+[ "$SOCKS_PORT" -ge 1024 ] && [ "$SOCKS_PORT" -le 65535 ] || exit 1
+[ -n "${SOCKS_USER:-}" ] && [ -n "${SOCKS_PASS:-}" ] || exit 1
+[ "$SOCKS_PASS" != REPLACE_WITH_RANDOM_PASSWORD ] || { echo '请先设置 SOCKS 密码。' >&2; exit 1; }
+# 单个进程的 FD 上限，控制极小内存机器的并发资源；不等于精确连接数。
+# Debian /bin/sh 是 dash，支持此扩展。
+# shellcheck disable=SC3045
+ulimit -n 64
+exec microsocks -i 127.0.0.1 -p "$SOCKS_PORT" -u "$SOCKS_USER" -P "$SOCKS_PASS"

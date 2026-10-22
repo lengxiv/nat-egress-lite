@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+CONF=${1:-/etc/nat-egress/egress.conf}
+[ -r "$CONF" ] || { echo '无法读取落地配置。' >&2; exit 1; }
+# shellcheck disable=SC1090
+. "$CONF"
+case ${JP_HOST:-} in ''|REPLACE*|-*|*[!a-zA-Z0-9.:-]*) echo 'JP_HOST 请填写单个 IP 或域名。' >&2; exit 1;; esac
+case ${JP_USER:-} in ''|*[!a-zA-Z0-9_-]*) echo 'JP_USER 无效。' >&2; exit 1;; esac
+for value in "${JP_PORT:-}" "${REMOTE_PORT:-}" "${SOCKS_PORT:-}"; do
+    case "$value" in ''|*[!0-9]*) echo '端口必须为整数。' >&2; exit 1;; esac
+    [ "$value" -ge 1 ] && [ "$value" -le 65535 ] || exit 1
+done
+case ${SSH_WINDOW:-} in ''|*[!0-9]*) exit 1;; esac
+[ "$SSH_WINDOW" -ge 16384 ] && [ "$SSH_WINDOW" -le 131072 ] || exit 1
+case ${SSH_KEEPALIVE:-} in ''|*[!0-9]*) exit 1;; esac
+[ "$SSH_KEEPALIVE" -ge 10 ] && [ "$SSH_KEEPALIVE" -le 60 ] || exit 1
+if [ ! -s "$HOME/.ssh/id_dropbear" ] || [ ! -s "$HOME/.ssh/known_hosts" ]; then
+    echo '缺少落地私钥或经过核验的日本 VPS 主机公钥。' >&2
+    exit 1
+fi
+unset DROPBEAR_PASSWORD SSH_AUTH_SOCK SSH_ASKPASS SSH_ASKPASS_ALWAYS
+# Debian /bin/sh 是 dash，支持此扩展。
+# shellcheck disable=SC3045
+ulimit -n 64
+# 不用 -y；不分配 shell；只把日本 VPS 回环高端口转到落地回环 SOCKS。
+exec dbclient -N -T -K "$SSH_KEEPALIVE" -W "$SSH_WINDOW" \
+    -o BatchMode=yes -o PasswordAuthentication=no \
+    -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes \
+    -p "$JP_PORT" -l "$JP_USER" -i "$HOME/.ssh/id_dropbear" \
+    -R "127.0.0.1:$REMOTE_PORT:127.0.0.1:$SOCKS_PORT" "$JP_HOST"

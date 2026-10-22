@@ -1,0 +1,11 @@
+# 仅由管理员编辑：这是可信 shell 配置文件，权限应为 root:nat-egress 0640。
+JP_HOST='REPLACE_WITH_JP_IP_OR_DOMAIN'
+JP_PORT='22'
+JP_USER='nat-tunnel'
+REMOTE_PORT='19080'
+SOCKS_PORT='1080'
+SOCKS_USER='egress'
+SOCKS_PASS='REPLACE_WITH_RANDOM_PASSWORD'
+# 每个 SSH 通道接收窗口，单位字节；增大会提高潜在内存占用。
+SSH_WINDOW='32768'
+SSH_KEEPALIVE='20'

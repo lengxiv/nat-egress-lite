@@ -1,0 +1,34 @@
+[Unit]
+Description=NAT Egress Lite - authenticated reverse SSH tunnel
+Wants=network-online.target nat-egress-socks.service
+After=network-online.target nat-egress-socks.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=nat-egress
+Group=nat-egress
+Environment=HOME=/var/lib/nat-egress
+ExecStart=/usr/local/lib/nat-egress/run-tunnel
+Restart=always
+RestartSec=10
+TimeoutStopSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+LimitNOFILE=64
+TasksMax=8
+MemoryAccounting=true
+MemoryMax=20M
+LogRateLimitIntervalSec=60s
+LogRateLimitBurst=5
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+#!/bin/sh
+set -u
+echo '== 系统与架构 =='
+cat /etc/os-release
+uname -m
+uname -r
+echo '== 资源 =='
+free -m
+df -h /
+echo '== PID 1 / 网络工具 =='
+cat /proc/1/comm
+if command -v ip >/dev/null 2>&1; then
+    name="wgp$$"
+    # 创建专用无地址探测接口，不修改已有接口和路由。
+    if ip link add "$name" type wireguard; then
+        ip link del "$name"
+        echo '内核 WireGuard 接口创建成功；仍需确认出站 UDP 和日本 VPS 配置。'
+    else
+        echo 'WireGuard 不可确认/不可用：请看错误是否为权限、内核支持或资源不足。'
+    fi
+else
+    echo '没有 ip 命令；这不能证明内核不支持 WireGuard。'
+fi
+ls -l /dev/net/tun 2>/dev/null || echo 'TUN 未发现；内核 WireGuard 不依赖它。'
+echo '== 已安装轻量组件 =='
+dpkg-query -W microsocks dropbear-bin 2>/dev/null || true

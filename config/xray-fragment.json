@@ -1,0 +1,37 @@
+{
+  "outbounds": [
+    {
+      "tag": "nat-egress",
+      "protocol": "socks",
+      "settings": {
+        "servers": [
+          {
+            "address": "127.0.0.1",
+            "port": 19080,
+            "users": [
+              { "user": "egress", "pass": "REPLACE_WITH_RANDOM_PASSWORD" }
+            ]
+          }
+        ]
+      },
+      "mux": { "enabled": false }
+    },
+    { "tag": "nat-egress-block", "protocol": "blackhole", "settings": {} }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["REPLACE_WITH_EXISTING_INBOUND_TAG"],
+        "network": "udp",
+        "outboundTag": "nat-egress-block"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["REPLACE_WITH_EXISTING_INBOUND_TAG"],
+        "network": "tcp",
+        "outboundTag": "nat-egress"
+      }
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+[Unit]
+Description=NAT Egress Lite - loopback SOCKS5 TCP
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=nat-egress
+Group=nat-egress
+Environment=HOME=/var/lib/nat-egress
+ExecStart=/usr/local/lib/nat-egress/run-socks
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+LimitNOFILE=64
+TasksMax=40
+MemoryAccounting=true
+MemoryMax=16M
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+*.o
+vendor/microsocks/microsocks
+vendor/microsocks/config.mak
+*.pem
+*.key
+id_dropbear
+id_ed25519*
+known_hosts
+egress.conf
+.env
+__pycache__/
