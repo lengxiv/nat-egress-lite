@@ -20,15 +20,15 @@ case ${SOCKS_PORT:-} in ''|*[!0-9]*) echo 'SOCKS_PORT 必须为整数。' >&2; e
 ulimit -n 64
 exec microsocks -i 127.0.0.1 -p "$SOCKS_PORT" -u "$SOCKS_USER" -P "$SOCKS_PASS"
 NE_EMBED_730A0ACFB8A5C4B3
-cat > "$NE_BUNDLE/run-tunnel" <<'NE_EMBED_2A4FF055D7B67169'
+cat > "$NE_BUNDLE/run-tunnel" <<'NE_EMBED_4526190AFD2B34E8'
 #!/bin/sh
 set -eu
 CONF=${1:-/etc/nat-egress/egress.conf}
 [ -r "$CONF" ] || { echo '无法读取落地配置。' >&2; exit 1; }
 # shellcheck disable=SC1090
 . "$CONF"
-case ${JP_HOST:-} in ''|REPLACE*|-*|*[!a-zA-Z0-9.:-]*) echo 'JP_HOST 请填写单个 IP 或域名。' >&2; exit 1;; esac
-case ${JP_USER:-} in ''|*[!a-zA-Z0-9_-]*) echo 'JP_USER 无效。' >&2; exit 1;; esac
+case ${JP_HOST:-} in ''|REPLACE*|-*|*[!a-zA-Z0-9.:-]*) echo '入口地址请填写单个 IP 或域名。' >&2; exit 1;; esac
+case ${JP_USER:-} in ''|*[!a-zA-Z0-9_-]*) echo '隧道用户名无效。' >&2; exit 1;; esac
 for value in "${JP_PORT:-}" "${REMOTE_PORT:-}" "${SOCKS_PORT:-}"; do
     case "$value" in ''|*[!0-9]*) echo '端口必须为整数。' >&2; exit 1;; esac
     [ "$value" -ge 1 ] && [ "$value" -le 65535 ] || exit 1
@@ -37,21 +37,34 @@ case ${SSH_WINDOW:-} in ''|*[!0-9]*) exit 1;; esac
 [ "$SSH_WINDOW" -ge 16384 ] && [ "$SSH_WINDOW" -le 131072 ] || exit 1
 case ${SSH_KEEPALIVE:-} in ''|*[!0-9]*) exit 1;; esac
 [ "$SSH_KEEPALIVE" -ge 10 ] && [ "$SSH_KEEPALIVE" -le 60 ] || exit 1
-if [ ! -s "$HOME/.ssh/id_dropbear" ] || [ ! -s "$HOME/.ssh/known_hosts" ]; then
-    echo '缺少落地私钥或经过核验的日本 VPS 主机公钥。' >&2
+case ${SSH_BACKEND:-dropbear} in
+    dropbear) key="$HOME/.ssh/id_dropbear";;
+    openssh) key="$HOME/.ssh/id_ed25519";;
+    *) echo 'SSH 后端必须是 dropbear 或 openssh。' >&2; exit 1;;
+esac
+if [ ! -s "$key" ] || [ ! -s "$HOME/.ssh/known_hosts" ]; then
+    echo '缺少对应后端的私钥或经过核验的入口主机公钥。' >&2
     exit 1
 fi
 unset DROPBEAR_PASSWORD SSH_AUTH_SOCK SSH_ASKPASS SSH_ASKPASS_ALWAYS
-# Debian /bin/sh 是 dash，支持此扩展。
+# dash、BusyBox ash 均支持此文件描述符限制。
 # shellcheck disable=SC3045
 ulimit -n 64
-# 不用 -y；不分配 shell；只把日本 VPS 回环高端口转到落地回环 SOCKS。
+if [ "${SSH_BACKEND:-dropbear}" = openssh ]; then
+    exec ssh -F /dev/null -N -T -o BatchMode=yes -o PasswordAuthentication=no \
+        -o KbdInteractiveAuthentication=no -o StrictHostKeyChecking=yes \
+        -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" -o GlobalKnownHostsFile=/dev/null \
+        -o IdentitiesOnly=yes -o Compression=no -o ConnectTimeout=20 \
+        -o "ServerAliveInterval=$SSH_KEEPALIVE" -o ServerAliveCountMax=3 \
+        -o ExitOnForwardFailure=yes -p "$JP_PORT" -l "$JP_USER" -i "$key" \
+        -R "127.0.0.1:$REMOTE_PORT:127.0.0.1:$SOCKS_PORT" "$JP_HOST"
+fi
 exec dbclient -N -T -K "$SSH_KEEPALIVE" -W "$SSH_WINDOW" \
     -o BatchMode=yes -o PasswordAuthentication=no \
     -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes \
-    -p "$JP_PORT" -l "$JP_USER" -i "$HOME/.ssh/id_dropbear" \
+    -p "$JP_PORT" -l "$JP_USER" -i "$key" \
     -R "127.0.0.1:$REMOTE_PORT:127.0.0.1:$SOCKS_PORT" "$JP_HOST"
-NE_EMBED_2A4FF055D7B67169
+NE_EMBED_4526190AFD2B34E8
 cat > "$NE_BUNDLE/nat-egress-socks.service" <<'NE_EMBED_EDF8C6A213450C21'
 [Unit]
 Description=NAT Egress Lite - loopback SOCKS5 TCP
@@ -1060,8 +1073,245 @@ def main(argv: list[str]) -> int:
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
 NE_EMBED_B32DE4A6EBFDBAF3
+cat > "$NE_BUNDLE/portable.sh" <<'NE_EMBED_CC2BE295B52926D3'
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# 通用 Linux 适配层；被 source 时不执行安装和服务操作。
+NE_OS_ID=${NE_OS_ID-unknown}
+NE_OS_VERSION=${NE_OS_VERSION-unknown}
+NE_ARCH=${NE_ARCH-unknown}
+NE_PACKAGE_MANAGER=${NE_PACKAGE_MANAGER-unknown}
+NE_INIT=${NE_INIT-unsupported}
+NE_SSH_BACKEND=${NE_SSH_BACKEND-}
+NE_KEY_NAME=${NE_KEY_NAME-}
+NE_APT_READY=${NE_APT_READY-0}
+ne_log() { printf '%s\n' "$*" >&2; }
+ne_die() { ne_log "错误：$*"; return 1; }
+
+ne_detect_platform() {
+    local key value machine
+    NE_OS_ID=unknown; NE_OS_VERSION=unknown
+    if [[ -r /etc/os-release ]]; then
+        while IFS='=' read -r key value; do
+            value=${value#\"}; value=${value%\"}; value=${value#\'}; value=${value%\'}
+            case "$key" in ID) NE_OS_ID=$value;; VERSION_ID) NE_OS_VERSION=$value;; esac
+        done < /etc/os-release
+    fi
+    machine=$(uname -m)
+    case "$machine" in x86_64|amd64) NE_ARCH=amd64;; aarch64|arm64) NE_ARCH=arm64;; *) NE_ARCH=$machine;; esac
+    if command -v apt-get >/dev/null 2>&1; then NE_PACKAGE_MANAGER=apt
+    elif command -v apk >/dev/null 2>&1; then NE_PACKAGE_MANAGER=apk
+    elif command -v dnf >/dev/null 2>&1; then NE_PACKAGE_MANAGER=dnf
+    elif command -v yum >/dev/null 2>&1; then NE_PACKAGE_MANAGER=yum
+    else NE_PACKAGE_MANAGER=unknown; fi
+}
+ne_detect_init() {
+    NE_INIT=unsupported
+    if [[ $(cat /proc/1/comm 2>/dev/null || true) == systemd ]] && command -v systemctl >/dev/null 2>&1 && systemctl show-environment >/dev/null 2>&1; then
+        NE_INIT=systemd
+    elif command -v rc-service >/dev/null 2>&1 && { [[ -e /run/openrc/softlevel ]] || [[ $(cat /proc/1/comm 2>/dev/null || true) == init ]]; }; then
+        NE_INIT=openrc
+    fi
+}
+ne_package_install() {
+    case "$NE_PACKAGE_MANAGER" in
+        apt)
+            if [[ $NE_APT_READY != 1 ]]; then apt-get update || return 1; NE_APT_READY=1; fi
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@";;
+        apk) apk add --no-cache "$@";;
+        dnf) dnf install -y "$@";;
+        yum) yum install -y "$@";;
+        *) ne_die '未发现受支持的包管理器';;
+    esac
+}
+_ne_modern_dropbear() {
+    local help
+    command -v dbclient >/dev/null 2>&1 && command -v dropbearkey >/dev/null 2>&1 || return 1
+    help=$(dbclient -o help 2>&1 || true)
+    [[ $help == *BatchMode* && $help == *StrictHostKeyChecking* && $help == *ExitOnForwardFailure* ]]
+}
+_ne_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"
+    elif command -v busybox >/dev/null 2>&1; then busybox sha256sum "$1"
+    else return 1; fi
+}
+ne_install_microsocks_fallback() {
+    [[ $NE_ARCH == amd64 || $NE_ARCH == arm64 ]] || { ne_die "此架构 $NE_ARCH 需要发行版提供 microsocks；没有对应预编译组件。"; return 1; }
+    local name="microsocks-linux-$NE_ARCH" url tmp expected actual
+    url="https://github.com/lengxiv/nat-egress-lite/releases/download/v0.3.0/$name"
+    [[ -r $NE_BUNDLE/microsocks.sha256 ]] || { ne_die '缺少 SHA256 清单，拒绝下载组件。'; return 1; }
+    expected=$(awk -v f="$name" '$2 == f {print $1; exit}' "$NE_BUNDLE/microsocks.sha256")
+    [[ $expected =~ ^[0-9a-f]{64}$ ]] || { ne_die '组件校验值无效。'; return 1; }
+    tmp=$(mktemp) || return 1
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --proto '=https' "$url" -o "$tmp" || { rm -f "$tmp"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -O "$tmp" "$url" || { rm -f "$tmp"; return 1; }
+    else rm -f "$tmp"; ne_die '没有 curl/wget，无法取得预编译组件。'; return 1; fi
+    actual=$(_ne_sha256 "$tmp" | awk '{print $1}') || { rm -f "$tmp"; return 1; }
+    [[ $actual == "$expected" ]] || { rm -f "$tmp"; ne_die 'SHA256 不匹配，拒绝安装。'; return 1; }
+    install -d -m 0755 /usr/local/bin
+    install -m 0755 "$tmp" /usr/local/bin/microsocks || { rm -f "$tmp"; return 1; }
+    rm -f "$tmp"
+}
+ne_install_dependencies() {
+    ne_detect_platform
+    local base=() ssh_needed=no
+    if ! _ne_modern_dropbear && { ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; }; then ssh_needed=yes; fi
+    case "$NE_PACKAGE_MANAGER" in
+        apt)
+            [[ $ssh_needed == no ]] || base+=(openssh-client)
+            command -v ss >/dev/null 2>&1 || base+=(iproute2)
+            command -v useradd >/dev/null 2>&1 || base+=(passwd)
+            command -v su >/dev/null 2>&1 || base+=(util-linux);;
+        apk)
+            [[ $ssh_needed == no ]] || base+=(openssh-client-default)
+            command -v ss >/dev/null 2>&1 || base+=(iproute2);;
+        dnf|yum)
+            [[ $ssh_needed == no ]] || base+=(openssh-clients)
+            command -v ss >/dev/null 2>&1 || base+=(iproute)
+            command -v useradd >/dev/null 2>&1 || base+=(shadow-utils);;
+        *)
+            if [[ $ssh_needed != no ]] || ! command -v ss >/dev/null 2>&1; then
+                ne_die '此发行版需先手动准备 OpenSSH/密钥工具及 ss；不会猜测软件仓库。'
+                return 1
+            fi;;
+    esac
+    if ((${#base[@]})); then ne_package_install "${base[@]}" || return 1; fi
+    # Dropbear 仅作为可选轻量优化；不能让它或 microsocks 的缺包拖垮基础依赖。
+    if ! command -v dbclient >/dev/null 2>&1; then
+        case "$NE_PACKAGE_MANAGER" in apt) ne_package_install dropbear-bin || true;; apk) ne_package_install dropbear || true;; esac
+    fi
+    if ! command -v microsocks >/dev/null 2>&1; then
+        if [[ $NE_PACKAGE_MANAGER == unknown ]] || ! ne_package_install microsocks; then
+            ne_log '未通过仓库获得 microsocks；使用带固定 SHA256 的预编译版本。'
+        fi
+        command -v microsocks >/dev/null 2>&1 || ne_install_microsocks_fallback || return 1
+    fi
+    command -v ss >/dev/null 2>&1 || { ne_die '安装后仍缺少 ss。'; return 1; }
+    if ! _ne_modern_dropbear && { ! command -v ssh >/dev/null 2>&1 || ! command -v ssh-keygen >/dev/null 2>&1; }; then
+        ne_die '没有可用的安全 SSH 客户端及密钥工具。'; return 1
+    fi
+    [[ $NE_PACKAGE_MANAGER != apt ]] || apt-get clean
+}
+ne_select_ssh() {
+    if _ne_modern_dropbear; then NE_SSH_BACKEND=dropbear; NE_KEY_NAME=id_dropbear
+    else NE_SSH_BACKEND=openssh; NE_KEY_NAME=id_ed25519; fi
+    export NE_SSH_BACKEND NE_KEY_NAME
+}
+ne_run_as() {
+    local user=$1 command='' argument escaped
+    shift
+    if command -v runuser >/dev/null 2>&1; then runuser -u "$user" -- "$@"
+    elif command -v su >/dev/null 2>&1; then
+        for argument in "$@"; do
+            escaped=$(printf '%s' "$argument" | sed "s/'/'\\\\''/g")
+            command+="'$escaped' "
+        done
+        su -s /bin/sh -c "exec $command" "$user"
+    else ne_die '缺少 runuser/su。'; return 1; fi
+}
+ne_account_entry() {
+    if command -v getent >/dev/null 2>&1; then getent "$1" "$2"
+    else awk -F: -v name="$2" '$1 == name {print; found=1} END {if (!found) exit 2}' "/etc/$1"; fi
+}
+ne_create_account() {
+    local user=${1:-nat-egress} group=${2:-nat-egress} home=${3:-/var/lib/nat-egress} nologin=/usr/sbin/nologin
+    [[ -x $nologin ]] || nologin=/sbin/nologin
+    [[ -x $nologin ]] || nologin=/bin/false
+    if ! ne_account_entry group "$group" >/dev/null 2>&1; then
+        if command -v groupadd >/dev/null 2>&1; then groupadd --system "$group"
+        else addgroup -S "$group"; fi
+    fi
+    if ne_account_entry passwd "$user" >/dev/null 2>&1; then
+        [[ $(ne_account_entry passwd "$user" | cut -d: -f6) == "$home" && $(id -gn "$user") == "$group" ]] || { ne_die '已有项目账户 HOME/主组不匹配，拒绝覆盖。'; return 1; }
+    elif command -v useradd >/dev/null 2>&1; then
+        useradd --system --gid "$group" --home-dir "$home" --create-home --shell "$nologin" "$user"
+    else adduser -S -D -h "$home" -G "$group" -s "$nologin" "$user"; fi
+    install -d -o "$user" -g "$group" -m 0700 "$home"
+}
+ne_service_active() {
+    case "$NE_INIT" in systemd) systemctl is-active --quiet "$1";; openrc) rc-service "$1" status >/dev/null 2>&1;; *) return 1;; esac
+}
+ne_install_services() {
+    local bundle=$1 name
+    case "$NE_INIT" in
+        systemd)
+            install -m 0644 "$bundle/nat-egress-socks.service" "$bundle/nat-egress-tunnel.service" /etc/systemd/system/
+            systemctl daemon-reload
+            systemctl enable nat-egress-socks nat-egress-tunnel;;
+        openrc)
+            for name in socks tunnel; do
+                install -m 0755 "$bundle/nat-egress-$name.openrc" "/etc/init.d/nat-egress-$name"
+                rc-update add "nat-egress-$name" default
+            done;;
+        *) ne_die '需要实际运行的 systemd/OpenRC，不能注册常驻服务。'; return 1;;
+    esac
+}
+ne_start_services() {
+    case "$NE_INIT" in
+        systemd) systemctl restart nat-egress-socks nat-egress-tunnel;;
+        openrc)
+            rc-service nat-egress-socks restart || rc-service nat-egress-socks start || return 1
+            rc-service nat-egress-tunnel restart || rc-service nat-egress-tunnel start;;
+        *) return 1;;
+    esac
+}
+NE_EMBED_CC2BE295B52926D3
+cat > "$NE_BUNDLE/nat-egress-socks.openrc" <<'NE_EMBED_A2E573256D6B51E5'
+#!/sbin/openrc-run
+
+# NAT Egress Lite - loopback SOCKS5 TCP
+supervisor=supervise-daemon
+command=/usr/local/lib/nat-egress/run-socks
+command_user="nat-egress:nat-egress"
+export HOME=/var/lib/nat-egress
+
+# The wrapper remains in the foreground; supervise-daemon restarts it after
+# an unexpected exit.  The wrapper itself limits its file descriptors to 64.
+respawn_delay=10
+respawn_max=0
+output_log=/dev/null
+error_log=/dev/null
+
+depend() {
+    need net
+}
+NE_EMBED_A2E573256D6B51E5
+cat > "$NE_BUNDLE/nat-egress-tunnel.openrc" <<'NE_EMBED_B03D1848C2FED2AA'
+#!/sbin/openrc-run
+
+# NAT Egress Lite - authenticated reverse SSH tunnel
+supervisor=supervise-daemon
+command=/usr/local/lib/nat-egress/run-tunnel
+command_user="nat-egress:nat-egress"
+export HOME=/var/lib/nat-egress
+
+# The wrapper remains in the foreground; supervise-daemon restarts it after
+# an unexpected exit.  The wrapper itself limits its file descriptors to 64.
+respawn_delay=10
+respawn_max=0
+output_log=/dev/null
+# Send tunnel failures to syslog rather than an unbounded OpenRC log file.
+error_logger="logger -t nat-egress-tunnel"
+
+depend() {
+    need net nat-egress-socks
+}
+NE_EMBED_B03D1848C2FED2AA
+cat > "$NE_BUNDLE/microsocks.sha256" <<'NE_EMBED_661FD658BD48ACF2'
+fd9ab4260972e8c40f7386bec07823d31cb61709bbad0c18d36232a2514c4962  microsocks-linux-amd64
+4e3d2eb590d8cdfad84410a854762afcbc8563db54a1bab633153f3a6a30bb38  microsocks-linux-arm64
+NE_EMBED_661FD658BD48ACF2
 # 此文件是独立 oneclick.sh 的源代码；发布文件由 build-oneclick.py 嵌入其依赖。
 set -Eeuo pipefail
+if [[ -n ${NE_BUNDLE:-} && -f $NE_BUNDLE/portable.sh ]]; then
+    # shellcheck disable=SC1090,SC1091
+    source "$NE_BUNDLE/portable.sh"
+elif [[ -f $(dirname -- "${BASH_SOURCE[0]}")/portable.sh ]]; then
+    # shellcheck disable=SC1090,SC1091
+    source "$(dirname -- "${BASH_SOURCE[0]}")/portable.sh"
+fi
 
 say() { printf '%s\n' "[一键部署] $*"; }
 fail() { printf '%s\n' "[错误] $*" >&2; exit 1; }
@@ -1099,15 +1349,15 @@ help_text() {
     cat <<'HELP'
 NAT Egress Lite 交互式一键部署
 
-在 Debian 13 NAT 落地机上以 root 运行：
+在支持的 Linux 落地机上以 root 运行（自动识别系统和架构）：
   bash oneclick.sh
-  或 sh install-debian.sh（已下载整个项目时）
+  或 sh install.sh（在线引导，自动安装缺失的 Bash）
 
-输入日本 VPS 地址、可访问的 SSH 端口和管理员用户名即可开始。
-落地 SOCKS 端口自动避开已监听端口，也可交互指定；日本反向端口自动选择。
-脚本经 SSH 配置日本端并自动生成/校验/备份 Xray 配置，最后启动落地服务。
+输入入口服务器 地址、可访问的 SSH 端口和管理员用户名即可开始。
+落地 SOCKS 端口自动避开已监听端口，也可交互指定；入口反向端口自动选择。
+脚本经 SSH 配置入口端并自动生成/校验/备份 Xray 配置，最后启动落地服务。
 首次 SSH 连接需要你核对并确认主机指纹；密码在 SSH 提示中现场输入。
-日本管理员须是 root，或具备免密 sudo；原生 Xray systemd 服务可自动合并。
+入口管理员须是 root，或具备免密 sudo；原生 Xray systemd 服务可自动合并。
 不修改当前管理 SSH 端口，不会把 SOCKS 暴露公网。此方案仅支持 TCP。
 
 --help       显示帮助
@@ -1119,31 +1369,21 @@ main() {
     case ${1:-} in --help|-h) help_text; return;; --dry-run) help_text; say '演练模式：没有安装软件、连接服务器或修改配置。'; return;; '') ;; *) fail '未知参数；运行 bash oneclick.sh --help。';; esac
     [[ $EUID -eq 0 ]] || fail '请以 root 运行。'
     [[ -r /dev/tty && -w /dev/tty ]] || fail '需要交互终端；请先保存脚本，再 bash oneclick.sh，不要直接把脚本 pipe 到 bash。'
-    # shellcheck disable=SC1091
-    source /etc/os-release
-    [[ $ID == debian && $VERSION_ID == 13 ]] || fail '落地机安装器仅支持 Debian 13。'
-    [[ $(cat /proc/1/comm) == systemd ]] || fail '此落地机的 PID 1 不是 systemd，不能自动注册服务。'
+    [[ $(uname -s) == Linux ]] || fail '目前支持 Linux，不支持原生 Windows/macOS。'
+    ne_detect_platform
+    ne_detect_init
+    [[ $NE_INIT != unsupported ]] || fail '未检测到实际运行的 systemd/OpenRC；无初始化系统的容器暂不支持自动常驻部署。'
     : "${NE_BUNDLE:?请使用构建好的 oneclick.sh，而不是直接执行 setup-head.sh。}"
     umask 077
-    say "目标系统：$PRETTY_NAME / $(dpkg --print-architecture)。不在落地机编译，不安装 Python 或 Docker。"
+    say "目标系统：$NE_OS_ID $NE_OS_VERSION / $NE_ARCH / $NE_INIT。不在落地机编译，不安装 Python 或 Docker。"
     say '目前只支持 TCP。监听端口检测不等于商家 NAT 映射或防火墙放行；落地端不需要公网入站映射。'
     free -m
     df -h /
-    yes_no '开始安装并配置两端（日本端将备份并修改所选 Xray 配置）？' y || return 0
+    yes_no '开始安装并配置两端（入口端将备份并修改所选 Xray 配置）？' y || return 0
 
-    local pkg missing=()
-    for pkg in microsocks dropbear-bin iproute2; do
-        if [[ $(dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null || true) != installed ]]; then missing+=("$pkg"); fi
-    done
-    if ((${#missing[@]})); then
-        say '安装缺失的 Debian 官方软件包；64 MB 容器的 apt 过程仍可能因资源不足失败。'
-        apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
-        apt-get clean
-    fi
-    local dbhelp
-    dbhelp=$(dbclient -o help 2>&1 || true)
-    [[ $dbhelp == *StrictHostKeyChecking* && $dbhelp == *BatchMode* ]] || fail 'Dropbear 太旧或构建不完整；请更新 Debian 13 dropbear-bin 后重试。'
+    ne_install_dependencies || fail '依赖安装失败；请检查软件仓库、网络或可用空间。'
+    ne_select_ssh
+    say "已选择安全 SSH 后端：$NE_SSH_BACKEND（低版本 Dropbear 不会被强行使用）。"
     ss -H -ltn >/dev/null 2>&1 || fail '无法读取本机监听端口；请检查容器对 ss/netlink 的限制。'
 
     local old_host='' old_jp_port=22 old_socks_port=''
@@ -1156,25 +1396,25 @@ main() {
     fi
     local jp_host jp_port admin_user admin_key socks_port remote_port configure_xray xray_config inbound_tag
     while true; do
-        ask_value '日本 VPS 公网 IP 或域名' "$old_host"; jp_host=$REPLY
+        ask_value '入口服务器 公网 IP 或域名' "$old_host"; jp_host=$REPLY
         [[ $jp_host =~ ^[a-zA-Z0-9][a-zA-Z0-9.:-]*$ ]] && break
         say '请填写单个 IP/域名，不带 URL、用户名、方括号或端口。'
     done
-    say '日本 SSH 端口不能从落地机直接读取：使用你当前登录日本 VPS 的公网端口；它不是 Xray 的入口端口。'
+    say '入口 SSH 端口不能从落地机直接读取：使用你当前登录入口服务器 的公网端口；它不是 Xray 的入口端口。'
     while true; do
-        ask_value '日本 VPS 可访问的 SSH 端口' "$old_jp_port"
+        ask_value '入口服务器 可访问的 SSH 端口' "$old_jp_port"
         if valid_port "$REPLY"; then jp_port=$((10#$REPLY)); break; fi
         say '端口应为 1 到 65535。'
     done
     while true; do
-        ask_value '日本 VPS SSH 管理员（root 或具备免密 sudo 的用户）' root; admin_user=$REPLY
+        ask_value '入口服务器 SSH 管理员（root 或具备免密 sudo 的用户）' root; admin_user=$REPLY
         [[ $admin_user =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] && break
     done
-    ask_value '管理员 Dropbear 私钥路径（留空使用 SSH 密码/默认已有密钥）' ''; admin_key=$REPLY
-    [[ -z $admin_key || -r $admin_key ]] || fail '管理员私钥文件不可读；私钥须为 Dropbear 原生格式。'
+    ask_value "管理员 $NE_SSH_BACKEND 私钥路径（留空使用 SSH 密码/默认已有密钥）" ''; admin_key=$REPLY
+    [[ -z $admin_key || -r $admin_key ]] || fail '管理员私钥文件不可读；格式必须与所选 SSH 后端一致。'
     say "本机已监听 TCP 端口：$(listen_ports | paste -sd, -)"
     local proposed
-    if [[ -n $old_socks_port ]] && valid_port "$old_socks_port" && systemctl is-active --quiet nat-egress-socks; then
+    if [[ -n $old_socks_port ]] && valid_port "$old_socks_port" && ne_service_active nat-egress-socks; then
         proposed=$old_socks_port
     else
         proposed=$(free_local_port) || fail '未找到空闲本机端口，请检查监听情况。'
@@ -1184,18 +1424,18 @@ main() {
         if ! valid_port "$REPLY" || ((10#$REPLY < 1024)); then say '请填写 1024 到 65535。'; continue; fi
         socks_port=$((10#$REPLY))
         if port_busy "$socks_port"; then
-            if [[ $socks_port == "$old_socks_port" ]] && systemctl is-active --quiet nat-egress-socks; then break; fi
+            if [[ $socks_port == "$old_socks_port" ]] && ne_service_active nat-egress-socks; then break; fi
             say "端口 $socks_port 已占用，请换一个；不会关闭其他进程。"
         else break; fi
     done
     while true; do
-        ask_value '日本反向监听端口（0=在日本自动选空闲端口）' 0
+        ask_value '入口反向监听端口（0=在入口自动选空闲端口）' 0
         if [[ $REPLY == 0 ]]; then remote_port=0; break; fi
         if valid_port "$REPLY" && ((10#$REPLY >= 1024)); then remote_port=$((10#$REPLY)); break; fi
         say '输入 0 自动选择，或填写 1024 到 65535。'
     done
-    if yes_no '自动对接日本的原生 Xray 服务？' y; then configure_xray=yes; else configure_xray=no; fi
-    ask_value '日本 Xray 单文件 JSON 路径（回车自动识别）' auto; xray_config=$REPLY
+    if yes_no '自动对接入口的原生 Xray 服务？' y; then configure_xray=yes; else configure_xray=no; fi
+    ask_value '入口 Xray 单文件 JSON 路径（回车自动识别）' auto; xray_config=$REPLY
     if [[ $configure_xray == yes ]]; then
         ask_value '要使用落地的 Xray 入站 tag（回车自动识别唯一入口）' auto
     else
@@ -1206,27 +1446,35 @@ main() {
     [[ $xray_config == auto || $xray_config == /* ]] || fail 'Xray 配置路径必须为绝对路径或 auto。'
     [[ $xray_config != *$'\n'* && $inbound_tag != *$'\n'* ]] || fail '路径/tag 不得含换行。'
 
-    if ! id nat-egress >/dev/null 2>&1; then
-        useradd --system --user-group --home-dir /var/lib/nat-egress --create-home --shell /usr/sbin/nologin nat-egress
-    fi
-    [[ $(getent passwd nat-egress | cut -d: -f6) == /var/lib/nat-egress ]] || fail '已有 nat-egress 账户家目录不匹配，拒绝覆盖。'
-    install -d -o nat-egress -g nat-egress -m 0700 /var/lib/nat-egress /var/lib/nat-egress/.ssh
-    if [[ ! -s /var/lib/nat-egress/.ssh/id_dropbear ]]; then
-        runuser -u nat-egress -- dropbearkey -t ed25519 -f /var/lib/nat-egress/.ssh/id_dropbear >/dev/null
+    ne_create_account nat-egress nat-egress /var/lib/nat-egress || fail '无法创建安全的服务账户。'
+    install -d -o nat-egress -g nat-egress -m 0700 /var/lib/nat-egress/.ssh
+    local key_file="/var/lib/nat-egress/.ssh/$NE_KEY_NAME"
+    if [[ ! -s $key_file ]]; then
+        if [[ $NE_SSH_BACKEND == dropbear ]]; then
+            ne_run_as nat-egress dropbearkey -t ed25519 -f "$key_file" >/dev/null
+        else
+            ne_run_as nat-egress ssh-keygen -q -t ed25519 -N '' -f "$key_file"
+        fi
     fi
     local public_key socks_pass request response remote_command rc attempt actual_port host_key xray_status
-    public_key=$(runuser -u nat-egress -- dropbearkey -y -f /var/lib/nat-egress/.ssh/id_dropbear | awk '/^ssh-ed25519 / {print $1 " " $2; exit}')
+    if [[ $NE_SSH_BACKEND == dropbear ]]; then
+        public_key=$(ne_run_as nat-egress dropbearkey -y -f "$key_file" | awk '/^ssh-ed25519 / {print $1 " " $2; exit}')
+    else
+        public_key=$(ne_run_as nat-egress ssh-keygen -y -f "$key_file" | awk '{print $1 " " $2}')
+    fi
     [[ -n $public_key ]] || fail '无法提取落地公钥。'
     socks_pass=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
     request=$NE_BUNDLE/request.sh; response=$NE_BUNDLE/response.log
     remote_command='bash -s'
     [[ $admin_user == root ]] || remote_command='sudo -n bash -s'
-    local ssh_args=(-T -K 20 -o StrictHostKeyChecking=ask -o BatchMode=no -p "$jp_port" -l "$admin_user")
+    local ssh_client ssh_args=(-T -o StrictHostKeyChecking=ask -o BatchMode=no -p "$jp_port" -l "$admin_user")
+    if [[ $NE_SSH_BACKEND == dropbear ]]; then ssh_client=dbclient; ssh_args+=(-K 20)
+    else ssh_client=ssh; ssh_args+=(-o ServerAliveInterval=20); fi
     [[ -z $admin_key ]] || ssh_args+=(-i "$admin_key")
-    say '连接日本 VPS；首次连接请通过可信控制台核对显示的主机指纹，再确认。SSH 密码直接在 SSH 提示中输入。'
+    say '连接入口服务器；首次连接请通过可信控制台核对显示的主机指纹，再确认。SSH 密码直接在 SSH 提示中输入。'
     for ((attempt=1; attempt<=4; attempt++)); do
         {
-            # 日本端执行时才展开这些变量，不在本机展开。
+            # 入口端执行时才展开这些变量，不在本机展开。
             # shellcheck disable=SC2016
             printf '#!/usr/bin/env bash\nset -Eeuo pipefail\numask 077\nNE_WORK_DIR=$(mktemp -d /tmp/ne-jp.XXXXXX)\nexport NE_WORK_DIR\ntrap '\''rm -rf -- "$NE_WORK_DIR"'\'' EXIT\n'
             printf "cat > \"\$NE_WORK_DIR/xray_merge.py\" <<'NE_MERGE_SCRIPT_9F17'\n"
@@ -1238,7 +1486,7 @@ main() {
             cat "$NE_BUNDLE/setup-jp.sh"
         } > "$request"
         set +e
-        dbclient "${ssh_args[@]}" "$jp_host" "$remote_command" < "$request" | tee "$response"
+        "$ssh_client" "${ssh_args[@]}" "$jp_host" "$remote_command" < "$request" | tee "$response"
         rc=${PIPESTATUS[0]}
         set -e
         if ((rc==0)); then break; fi
@@ -1248,52 +1496,52 @@ main() {
                 ask_value '请选择一个实际入站 tag' ''; inbound_tag=$REPLY
                 [[ -n $inbound_tag && $inbound_tag != *$'\n'* ]] || fail '入口 tag 无效。'
             elif grep -q '^NE_NEED_CONFIG=' "$response"; then
-                say '自动识别存在歧义，请根据日本端输出填写明确的原生 Xray 配置路径。'
-                ask_value '日本 Xray 配置绝对路径' ''; xray_config=$REPLY
+                say '自动识别存在歧义，请根据入口端输出填写明确的原生 Xray 配置路径。'
+                ask_value '入口 Xray 配置绝对路径' ''; xray_config=$REPLY
                 [[ $xray_config == /* && $xray_config != *$'\n'* ]] || fail '配置路径无效。'
-            else fail '日本端要求额外配置，请检查上面的说明。'; fi
+            else fail '入口端要求额外配置，请检查上面的说明。'; fi
             continue
         fi
-        fail '日本端未配置成功；本机未启用新服务。请处理 SSH/权限/Xray 错误后重新运行。'
+        fail '入口端未配置成功；本机未启用新服务。请处理 SSH/权限/Xray 错误后重新运行。'
     done
     actual_port=$(sed -n 's/^NE_REMOTE_PORT=//p' "$response" | tail -1)
     host_key=$(sed -n 's/^NE_HOST_KEY=//p' "$response" | tail -1)
     xray_status=$(sed -n 's/^NE_XRAY_STATUS=//p' "$response" | tail -1)
-    valid_port "$actual_port" || fail '日本端没有返回有效反向端口。'
-    [[ $host_key =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]] || fail '日本端没有返回有效的 Ed25519 主机公钥。'
-    [[ $xray_status == merged || $xray_status == fragment ]] || fail '日本端 Xray 状态不完整。'
+    valid_port "$actual_port" || fail '入口端没有返回有效反向端口。'
+    [[ $host_key =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]] || fail '入口端没有返回有效的 Ed25519 主机公钥。'
+    [[ $xray_status == merged || $xray_status == fragment ]] || fail '入口端 Xray 状态不完整。'
 
     install -d -o root -g nat-egress -m 0750 /etc/nat-egress
     if [[ -e /etc/nat-egress/egress.conf ]]; then cp -p /etc/nat-egress/egress.conf "/etc/nat-egress/egress.conf.backup.$(date +%s)"; fi
     {
-        printf "JP_HOST='%s'\nJP_PORT='%s'\nJP_USER='nat-tunnel'\n" "$jp_host" "$jp_port"
+        printf "SSH_BACKEND='%s'\nJP_HOST='%s'\nJP_PORT='%s'\nJP_USER='nat-tunnel'\n" "$NE_SSH_BACKEND" "$jp_host" "$jp_port"
         printf "REMOTE_PORT='%s'\nSOCKS_PORT='%s'\nSOCKS_USER='egress'\nSOCKS_PASS='%s'\nSSH_WINDOW='32768'\nSSH_KEEPALIVE='20'\n" "$actual_port" "$socks_port" "$socks_pass"
     } > /etc/nat-egress/egress.conf
     chown root:nat-egress /etc/nat-egress/egress.conf
     chmod 0640 /etc/nat-egress/egress.conf
-    printf '%s %s\n' "$jp_host" "$host_key" > /var/lib/nat-egress/.ssh/known_hosts
+    local host_field=$jp_host
+    if [[ $NE_SSH_BACKEND == openssh && $jp_port != 22 ]]; then host_field="[$jp_host]:$jp_port"; fi
+    printf '%s %s\n' "$host_field" "$host_key" > /var/lib/nat-egress/.ssh/known_hosts
     chown nat-egress:nat-egress /var/lib/nat-egress/.ssh/known_hosts
     chmod 0600 /var/lib/nat-egress/.ssh/known_hosts
     install -d -m 0755 /usr/local/lib/nat-egress
     install -m 0755 "$NE_BUNDLE/run-socks" "$NE_BUNDLE/run-tunnel" /usr/local/lib/nat-egress/
-    install -m 0644 "$NE_BUNDLE/nat-egress-socks.service" "$NE_BUNDLE/nat-egress-tunnel.service" /etc/systemd/system/
-    systemctl daemon-reload
-    systemctl enable nat-egress-socks nat-egress-tunnel
-    systemctl restart nat-egress-socks nat-egress-tunnel
+    ne_install_services "$NE_BUNDLE" || fail '服务注册失败。'
+    ne_start_services || fail '服务启动失败。'
     local ready=no
     for ((attempt=0; attempt<15; attempt++)); do
-        if systemctl is-active --quiet nat-egress-socks && systemctl is-active --quiet nat-egress-tunnel; then ready=yes; break; fi
+        if ne_service_active nat-egress-socks && ne_service_active nat-egress-tunnel; then ready=yes; break; fi
         sleep 1
     done
-    [[ $ready == yes ]] || fail '本机服务启动失败，检查 systemctl status / journalctl；日本配置已完成。'
-    say "本机服务已启动：落地 127.0.0.1:$socks_port，日本反向 127.0.0.1:$actual_port。"
+    [[ $ready == yes ]] || fail '本机服务启动失败，请检查 systemctl/rc-service 和日志；入口端配置已完成。'
+    say "本机服务已启动：落地 127.0.0.1:$socks_port，入口反向 127.0.0.1:$actual_port。"
     say '服务 active 不等于端到端健康；请在客户端验证实际出口，不能据此保证 64 MB 稳定或没有 DNS 泄漏。'
     if [[ $xray_status == merged ]]; then
-        say '日本 Xray 已自动合并、校验并重载。现有客户端连接方式保持不变；选定入口的 TCP 走落地，UDP 阻断。'
+        say '入口 Xray 已自动合并、校验并重载。现有客户端连接方式保持不变；选定入口的 TCP 走落地，UDP 阻断。'
     else
-        say '你选择了不自动修改 Xray：日本端仅生成 /etc/nat-egress-jp/xray-fragment.json，尚未完成入口对接。'
+        say '你选择了不自动修改 Xray：入口端仅生成 /etc/nat-egress-jp/xray-fragment.json，尚未完成入口对接。'
     fi
-    say '不需要打开落地 NAT 公网端口；没有修改日本管理 SSH 监听端口。'
+    say '不需要打开落地 NAT 公网端口；没有修改入口管理 SSH 监听端口。'
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi

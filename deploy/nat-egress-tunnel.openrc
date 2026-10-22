@@ -1,0 +1,19 @@
+#!/sbin/openrc-run
+
+# NAT Egress Lite - authenticated reverse SSH tunnel
+supervisor=supervise-daemon
+command=/usr/local/lib/nat-egress/run-tunnel
+command_user="nat-egress:nat-egress"
+export HOME=/var/lib/nat-egress
+
+# The wrapper remains in the foreground; supervise-daemon restarts it after
+# an unexpected exit.  The wrapper itself limits its file descriptors to 64.
+respawn_delay=10
+respawn_max=0
+output_log=/dev/null
+# Send tunnel failures to syslog rather than an unbounded OpenRC log file.
+error_logger="logger -t nat-egress-tunnel"
+
+depend() {
+    need net nat-egress-socks
+}

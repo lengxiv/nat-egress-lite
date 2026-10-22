@@ -1,58 +1,60 @@
-# NAT Egress Lite — 交互式一键部署
+# NAT Egress Lite — 通用 Linux 落地一键部署
 
-在 **Debian 13 / ARM64 NAT 落地机**上以 root 执行一个脚本，填写日本 VPS 的 SSH 登录信息。脚本自动选端口、创建凭据、通过 SSH 配置日本端、对接现有原生 Xray，最后启动落地服务。落地侧只常驻 Dropbear 客户端和 microsocks，面向 64 MB 内存、1 GB 磁盘的个人低并发场景；不需要 Docker、Python 常驻服务或落地公网端口映射。
+这是可重复使用的 Linux 落地项目，**不绑定某一台 VPS，不限定 Debian 13/ARM64，也不限定日本入口**。你在准备作为落地的服务器上运行同一条命令，脚本检测系统、架构、服务管理器与端口，入口地址和 SSH 端口由交互输入。
 
-## 直接使用
+## 一键命令
 
-在 NAT 落地机以 root 执行以下一行，无需 GitHub Token：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lengxiv/nat-egress-lite/main/oneclick.sh -o /root/nat-egress-install.sh && bash /root/nat-egress-install.sh
-```
-
-仓库现为公共。脚本已经包含所需配置和代码，**不需要在落地机安装 Git、克隆整个仓库或编译源码**。若没有 curl，可先用已有 wget 下载：`wget -O /root/nat-egress-install.sh https://raw.githubusercontent.com/lengxiv/nat-egress-lite/main/oneclick.sh && bash /root/nat-egress-install.sh`。没有下载工具时需先安装 curl，或从 GitHub 下载脚本并上传到落地机，运行 `bash oneclick.sh`。
-
-如果已经下载完整项目，也可以用原命令，它现在会进入同一个交互向导：
+在落地机以 root 执行：
 
 ```sh
-sh install-debian.sh
+curl -fsSL https://raw.githubusercontent.com/lengxiv/nat-egress-lite/main/install.sh -o "$HOME/nat-egress-install.sh" && sh "$HOME/nat-egress-install.sh"
 ```
 
-脚本会询问日本公网 IP/域名、SSH 端口及管理员用户名；可以使用密码，或填写现有 Dropbear 格式的管理员私钥路径。**密码在 SSH 提示中现场输入，不写进脚本，不需要提交到聊天或仓库。** 日本管理员必须是 root，或者具有免密 sudo。首次连接会显示主机指纹，你需要通过可信的日本 VPS 控制台核对后确认，脚本不会跳过验证。
+只有 wget 时：
 
-随后按提示回车即可使用自动端口与自动 Xray 识别。检测有歧义时，会显示候选并让你输入配置路径或入站 tag，而不是擅自修改错误入口。
+```sh
+wget -O "$HOME/nat-egress-install.sh" https://raw.githubusercontent.com/lengxiv/nat-egress-lite/main/install.sh && sh "$HOME/nat-egress-install.sh"
+```
 
-## 自动完成哪些事情
+入口 `install.sh` 是 POSIX shell，可在缺少 Bash 的 Alpine 上先通过系统仓库补齐 Bash，再启动完整向导。公共仓库不需要 GitHub Token。部署端不安装 Git、不克隆源码、不安装编译器。
 
-落地端检测 Debian 版本、CPU 架构、systemd 和实际已监听的 TCP 端口。优先选择空闲的 SOCKS 端口；端口冲突时拒绝占用其他程序的端口，并提示重新输入。生成独立落地密钥与随机 SOCKS 密码，创建低权限账户和 systemd 服务。
+也可直接下载独立 `oneclick.sh` 后执行 `bash oneclick.sh`；完整源码包中的 `sh install-debian.sh` 仅保留旧命令兼容，已不限制 Debian。
 
-日本端读取实际监听情况，选择空闲的反向 TCP 端口，或者使用你指定的端口。自动添加专用受限隧道账户、公钥和回环转发限制，检查有效 sshd 配置后重载。**不改现有管理 SSH 监听端口，不改全局登录认证，不开放公网 SOCKS，也不擅自修改防火墙。**
+## 平台适配
 
-对于原生 `xray.service` 的单文件 JSON 配置，自动识别配置路径和唯一合适的入站 tag。多个配置或入口时让你选择。合并 SOCKS 出站与该入口的 TCP 路由，阻断该入口的 UDP；保留其他入站、原出站顺序和安全阻断规则。修改前备份，Xray 校验通过后再替换配置和重载；失败时恢复旧配置。重新运行不重复添加项目规则。
+自动识别 apt、apk、dnf/yum，分别覆盖 Debian/Ubuntu 系、Alpine 和 RHEL/Rocky/AlmaLinux/Fedora 系。不写死发行版版本；系统仓库需仍然可用。发行版原生软件包按本机架构安装。缺少 microsocks 包时，amd64/arm64 使用项目发布的静态 musl 组件并核验固定 SHA256；其他架构需要发行版提供可用的软件包。[1]
 
-运行完成会显示两端实际端口。你原来的 Xray 客户端连接方式不变，指定入口的 TCP 流量改由 NAT 落地出网。
+systemd 和 OpenRC 使用各自的服务文件。Alpine 不再被要求运行 systemd。现代 Dropbear 可用时优先使用；旧 Dropbear 不具备严格认证选项时自动使用 OpenSSH，不通过忽略安全选项“兼容”。[2] [3]
 
-## 端口识别的边界
+**“通用”不等于任何操作系统和权限条件都能运行。** 目前是 Linux 项目，需要 root、可用的软件仓库、实际运行的 systemd/OpenRC 和允许所需网络连接。原生 Windows/macOS、无 init 的裸容器、无对应包和静态组件的架构，不保证支持，脚本会明确报错。模拟适配测试不等于全部发行版真机测试。
 
-**落地 SOCKS 端口和日本反向端口会自动检测本机占用，并可交互输入。** 日本管理 SSH 的公网端口无法在尚未登录时从落地机可靠读取，所以由你填写，默认 22；它不是 VLESS/REALITY 等 Xray 客户端入口端口。如果日本本身有端口映射，需要填写实际公网可访问的 SSH 端口。
+## 交互时填写什么
 
-检测到“本机监听”不等于商家安全组、防火墙或 NAT 映射已经允许访问。此方案由落地端主动连接日本已有 SSH 端口，因此不要求落地公网映射端口，也不依赖 TUN。
+填写任意你有权管理的入口服务器地址、实际公网可访问的 SSH 端口和管理员用户名。管理员需要 root 或免密 sudo；密码直接在 SSH 提示中输入，或填写与所选 SSH 后端匹配的管理员私钥路径。首次连接需通过可信控制台核对主机指纹，不跳过验证。
 
-## 支持范围
+落地 SOCKS 端口会检测占用并自动建议，也可手动指定；入口反向端口会在入口检测并自动选空闲端口。SSH 公网端口在尚未登录时无法从落地可靠读取，因此由你输入，默认 22。监听检测不等于 NAT 映射或防火墙已放行。
+
+脚本生成独立落地密钥与随机密码，远程配置入口的专用受限隧道账户，匹配两端配置，然后启用落地服务。不改变入口管理 SSH 端口，不改变全局登录认证，不开放公网 SOCKS，也不擅自修改防火墙。
+
+如果选择自动对接 Xray，会发现原生 `xray.service` 单文件 JSON 路径和入站 tag；检测有歧义时显示候选并让你选择。配置先生成候选、校验和备份，再替换/重载，失败时尝试恢复；保留其他入口和原有安全阻断规则。自动合并仍要求入口端是原生 systemd Xray，不能接管 3x-ui 数据库、Docker 独立网络、拆分配置或 JSONC。你可明确选择仅生成合并片段，但这不等于已经完成 Xray 对接。
+
+## 数据路径与边界
 
 ```text
-客户端 → 日本现有 Xray 入站 → 加密 SSH 反向隧道 → NAT 落地 microsocks → 互联网
+客户端 → 任意已配置的 Xray 入口 → 加密 SSH 反向隧道 → 本项目的落地 SOCKS → 互联网
 ```
 
-**只支持 TCP，不支持 UDP。** microsocks 上游仅支持 SOCKS5 TCP CONNECT。[1] 所选入口的 UDP 会被阻断，不会悄悄从日本直连出口绕过；游戏、实时语音或必须使用 UDP 的应用不适合此版本。若未来确认有内核 WireGuard 网络管理权限且出站 UDP 可用，完整 TCP+UDP 落地优先评估 WireGuard，见 `docs/wireguard.md`。[2]
+入口地理位置没有限制。每套配置连接一个指定入口；若需要同一落地同时供多个入口使用，应为每条隧道增加独立实例，当前默认不是多入口管理面板。没有公网映射端口的 NAT 落地必须主动建立反向连接，无法让未经配置的任意入口直接连接它。
 
-日本端自动合并仅针对原生 systemd Xray 的单文件 JSON。3x-ui 等面板数据库管理、Docker 独立网络、拆分配置或 JSONC 注释配置不能承诺自动支持，脚本会停止并说明问题，而不是盲目覆盖。你也可明确选择不修改 Xray，此时只生成 `/etc/nat-egress-jp/xray-fragment.json`，并提示入口尚未完成对接。
+**此版本仅支持 TCP，不支持 UDP。** microsocks 是 SOCKS5 TCP CONNECT 实现，SSH 负责入口到落地的加密。[4] 所选入口 UDP 被阻断，不回退入口直连；游戏、语音和必须使用 UDP 的应用不适用。支持内核 WireGuard 且允许出站 UDP 时可评估完整 TCP+UDP 方案，见 `docs/wireguard.md`。
 
-SOCKS 两端只监听回环，SSH 使用主机验证和独立受限账户。[3] [4] 自动修改 Xray 仅影响所选入站；Xray 系统 DNS、客户端绕过代理流量和 IPv6 出口需按原配置另行确认，不能仅凭网页出口 IP 保证没有 DNS 泄漏。[5]
+两端 SOCKS 只监听回环，不是公开的无认证代理。已有客户端仍按原 Xray 协议连接入口。Xray/系统 DNS、应用绕过代理、IPv6 出口需另行按原配置审查，不能仅凭网页 IP 保证没有 DNS 泄漏。
 
-不能保证整个 Debian 系统在 64 MB 内存下长期稳定。安装时的 apt、基础系统服务、socket 缓冲和连接数量都可能造成 OOM。服务保留文件描述符与内存保护限制，但这些上限不是实际内存占用，也不替代你的真实 NAT 机器压测。SSH 多流复用同一个 TCP 隧道，不适合高并发、高吞吐或低时延游戏。
+64 MB 内存、1 GB 磁盘只是本项目的低资源设计目标，不是硬件筛选条件，也不保证永不 OOM。更大机器同样可用。依赖安装、基础服务、缓冲区与并发会影响峰值；systemd 的资源保护和 OpenRC 的监管接口也不同。无需在落地机运行面板、Docker、Python 常驻服务或源码编译。建议从个人低并发开始。
 
 ## 查看与停止
+
+systemd：
 
 ```sh
 systemctl status nat-egress-socks nat-egress-tunnel --no-pager
@@ -60,18 +62,28 @@ journalctl -u nat-egress-tunnel -n 30 --no-pager
 systemctl disable --now nat-egress-tunnel nat-egress-socks
 ```
 
-脚本完成后的 `active` 只是进程状态，不能代替真实客户端出口验证。落地配置位于 `/etc/nat-egress/egress.conf`，私钥只保存在落地机；不要上传这两个文件或备份到仓库。升级 Debian 安全软件包后可重启项目服务。
+OpenRC：
 
-## 开发与测试
+```sh
+rc-service nat-egress-socks status
+rc-service nat-egress-tunnel status
+rc-service nat-egress-tunnel stop
+rc-service nat-egress-socks stop
+rc-update del nat-egress-tunnel default
+rc-update del nat-egress-socks default
+```
 
-`oneclick.sh` 是可独立运行的发布脚本；修改源码后在开发机执行 `python3 build-oneclick.py` 重建。源流程位于 `scripts/setup-head.sh`，日本端配置位于 `scripts/setup-jp.sh`，Xray 合并逻辑位于 `scripts/xray_merge.py`。Python 只用于开发与日本端的配置处理，不在 64 MB 落地端安装。
+配置在 `/etc/nat-egress/egress.conf`，私钥在 `/var/lib/nat-egress/.ssh/`；不要上传配置、私钥或备份。`JP_HOST/JP_PORT` 等旧字段名仅用于历史兼容，不代表入口必须在日本。服务进程 active 不是端到端健康确认，安装后应验证真实客户端出口。
 
-端口识别和 Xray 合并有独立测试；`tests/integration.py` 是此前反向 SSH 数据路径的隔离开发测试。实际测试范围见 `docs/test-results.md`。目前没有连接或部署到用户的真实服务器。
+## 开发与验证
+
+通用适配层是 `scripts/portable.sh`，向导是 `scripts/setup-head.sh`；`scripts/setup-jp.sh` 保留旧文件名，但配置的是交互指定的任意入口。开发机运行 `python3 build-oneclick.py` 生成独立脚本。`scripts/build-static.sh` 只供开发机生成可复现静态组件，不能在小内存落地执行。
+
+平台、端口、OpenRC 文件和 Xray 合并有模拟/单元测试。隔离数据路径测试可用 `sudo python3 tests/integration.py --backend openssh`；它只使用临时账户和回环服务。实际范围见 `docs/test-results.md`，适配依据见 `docs/platform-sources.md`。尚未部署到用户真实机器，不能声称全部发行版和资源条件已经实测。
 
 ## References
 
-[1]: https://github.com/rofl0r/microsocks "MicroSocks upstream README"
-[2]: https://www.wireguard.com/quickstart/ "WireGuard Quick Start"
-[3]: https://manpages.debian.org/trixie/dropbear-bin/dbclient.1.en.html "Debian 13 dbclient manual"
-[4]: https://man.openbsd.org/sshd_config "OpenSSH server configuration manual"
-[5]: https://xtls.github.io/en/config/routing.html "Xray routing documentation"
+[1]: https://pkgs.alpinelinux.org/package/edge/testing/aarch64/microsocks "Alpine microsocks package metadata"
+[2]: https://pkgs.alpinelinux.org/package/v3.23/main/aarch64/openssh-client-default "Alpine OpenSSH client dependencies"
+[3]: https://packages.ubuntu.com/noble/openssh-client "Ubuntu OpenSSH client package"
+[4]: https://github.com/rofl0r/microsocks "MicroSocks upstream README"

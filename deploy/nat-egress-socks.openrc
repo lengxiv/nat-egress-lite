@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+
+# NAT Egress Lite - loopback SOCKS5 TCP
+supervisor=supervise-daemon
+command=/usr/local/lib/nat-egress/run-socks
+command_user="nat-egress:nat-egress"
+export HOME=/var/lib/nat-egress
+
+# The wrapper remains in the foreground; supervise-daemon restarts it after
+# an unexpected exit.  The wrapper itself limits its file descriptors to 64.
+respawn_delay=10
+respawn_max=0
+output_log=/dev/null
+error_log=/dev/null
+
+depend() {
+    need net
+}

@@ -18,7 +18,7 @@ ShellCheck 检查两个启动脚本通过；主代理另行检查安装器与 pr
 
 ## Dropbear 版本兼容边界
 
-沙盒已安装 Dropbear 2022.83，较 Debian 13 的 2025.89 旧。2022.83 会忽略 `BatchMode`、`PasswordAuthentication` 与 `StrictHostKeyChecking` 选项；此次测试中错误密钥拒绝依靠其既有 known_hosts 匹配行为。**不能据此宣称旧版具备本项目要求的完整无人值守严格认证语义。安装器仅面向 Debian 13；不应直接套用到 Ubuntu 旧 Dropbear 或更老版本。** Debian 13 dbclient 手册与 Dropbear 2025.89 的 cli-runopts.c 已核实这些选项受到支持。[1] [2]
+初版测试沙盒已安装 Dropbear 2022.83，较 Debian 13 的 2025.89 旧。2022.83 会忽略 `BatchMode`、`PasswordAuthentication` 与 `StrictHostKeyChecking` 选项；初版错误密钥拒绝依靠其既有 known_hosts 匹配行为。**不能据此宣称旧版具备完整无人值守严格认证语义。初版安装器当时仅面向 Debian 13；当前通用版本已移除该限制，并在旧 Dropbear 环境自动选择 OpenSSH。** Debian 13 dbclient 手册与 Dropbear 2025.89 的 cli-runopts.c 已核实这些选项受到支持。[1] [2]
 
 原生 Dropbear 私钥由 `dropbearkey` 生成，不把 OpenSSH 私钥容器直接作为 `id_dropbear` 使用。known_hosts 的纯主机名/IP + 算法 + Base64 三字段格式已通过此次测试；Dropbear 2025.89 的官方 cli-kex.c 同样按纯 remotehost 名称匹配，README 已据此修正。[3]
 
@@ -37,6 +37,14 @@ ShellCheck 检查两个启动脚本通过；主代理另行检查安装器与 pr
 `tests/test_jp_preflight.py` 三项通过：自动避开模拟已占用的 19080 并将实际端口传给合并器，同时读取模拟 sshd 实际启用的主机公钥；多个入站返回选择列表且不改原配置；显式已占用端口被拒绝。测试只执行预检部分，系统路径和服务使用临时副本及替身。
 
 七项 Python 测试与 Bash 端口测试均通过。**没有在用户两台真实服务器上执行交互式全流程，也没有进行真实 sshd 重载/Xray 重启失败的回滚演练。** 回滚分支有代码及静态检查，但不能据此保证所有真实系统配置都能成功。SSH 密码登录、商家权限、64 MB 资源压力和完整客户端出口仍需真机验证。
+
+## 通用 Linux 版本验证 — v0.3.0
+
+已移除固定 Debian 13 与 ARM64 判断、入口地理位置措辞，并加入 apt/apk/dnf/yum、systemd/OpenRC 与现代 Dropbear/OpenSSH 适配。Bash/ShellCheck 检查、九项平台/后端模拟检查、OpenRC 文件静态检查、端口测试、七项 Xray/入口预检 Python 单元测试通过；su 替身测试确认引号和空参数能安全传递。
+
+amd64 与 arm64 组件已使用官方 musl 1.2.6 及其 iconv 官方安全修补静态构建，生成固定 SHA256。AMD64 为交叉编译且检查 ELF 架构/静态链接；没有在 AMD64 真机上运行。ARM64 最终组件在 Ubuntu ARM64 沙盒参与了 `sudo python3 tests/integration.py --backend openssh`，退出码 0，汇总 PASS：回环监听、TCP/域名目标、密码认证、UDP 拒绝、错误主机密钥拒绝和反向端口冲突退出全部通过。
+
+这些结果证明适配逻辑和该沙盒中的 OpenSSH 数据路径，不等于逐个 Linux 发行版实机安装测试。未在 Alpine/OpenRC 或 RHEL/SELinux 真机启动服务，未执行真实入口 Xray 回滚演练，也未进行 64 MB 整机压测。无 root、无真实 init 或商家网络限制的环境不能由模拟测试保证可运行。
 
 ## References
 
